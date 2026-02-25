@@ -2,7 +2,7 @@
 
 # =============================================================================
 # Prerequisites Installation Script
-# Installs: AWS CLI, Terraform, kubectl
+# Installs: AWS CLI, Terraform, kubectl, Helm
 # Tested on: Ubuntu/Debian
 # =============================================================================
 
@@ -77,6 +77,19 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Install Helm
+# -----------------------------------------------------------------------------
+echo ""
+echo "⎈  Installing Helm..."
+
+if command -v helm &> /dev/null; then
+    echo "   Helm already installed: $(helm version --short)"
+else
+    curl -s https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    echo "   ✅ Helm installed: $(helm version --short)"
+fi
+
+# -----------------------------------------------------------------------------
 # Verify installations
 # -----------------------------------------------------------------------------
 echo ""
@@ -86,6 +99,7 @@ echo ""
 echo "   AWS CLI:    $(aws --version 2>/dev/null || echo 'Not found')"
 echo "   Terraform:  $(terraform --version 2>/dev/null | head -n1 || echo 'Not found')"
 echo "   kubectl:    $(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -n1 || echo 'Not found')"
+echo "   Helm:       $(helm version --short 2>/dev/null || echo 'Not found')"
 echo ""
 echo "📝 Next steps:"
 echo "   1. Configure AWS: aws configure"
