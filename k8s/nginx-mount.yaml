@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quickcart-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: quickcart
+  template:
+    metadata:
+      labels:
+        app: quickcart
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          volumeMounts:
+            - name: storage
+              mountPath: /usr/share/nginx/html/uploads
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: quickcart-pvc

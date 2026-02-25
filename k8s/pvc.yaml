@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: quickcart-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: quickcart-sc
+  resources:
+    requests:
+      storage: 5Gi
