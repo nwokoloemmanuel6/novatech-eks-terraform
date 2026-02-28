@@ -422,13 +422,140 @@ helm uninstall ingress-nginx -n ingress-nginx
 ```bash
 # 2. Wait ~60 seconds for LB to deprovision
 
-# 3. Destroy infrastructure
+# 3. Delete the EBS CSI addon
+aws eks delete-addon --cluster-name novatech-dev-cluster --addon-name aws-ebs-csi-driver --region us-east-1
+```
+
+> Removes the EBS CSI driver addon from the cluster. Must be done before destroying the cluster.
+
+```bash
+# 4. Delete the IAM role created by eksctl (via CloudFormation)
+aws cloudformation delete-stack --stack-name eksctl-novatech-dev-cluster-addon-iamserviceaccount-kube-system-ebs-csi-controller-sa --region us-east-1
+```
+
+> Deletes the CloudFormation stack that eksctl created for the IAM service account role. This removes the `AmazonEKS_EBS_CSI_DriverRole`.
+
+```bash
+# If the CloudFormation stack doesn't exist, delete the role manually:
+aws iam detach-role-policy --role-name AmazonEKS_EBS_CSI_DriverRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+aws iam delete-role --role-name AmazonEKS_EBS_CSI_DriverRole
+```
+
+> Manually detaches the policy and deletes the IAM role. Use this if the CloudFormation stack was already deleted or doesn't exist.
+
+```bash
+# 5. Delete the OIDC provider
+OIDC_ID=$(aws eks describe-cluster --name novatech-dev-cluster --region us-east-1 --query "cluster.identity.oidc.issuer" --output text | sed 's|https://||')
+aws iam delete-open-id-connect-provider --open-id-connect-provider-arn arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):oidc-provider/$OIDC_ID
+```
+
+> Deletes the IAM OIDC provider linked to this cluster. If you skip this and the IAM role, re-deploying will fail because the old trust policy won't match the new cluster.
+
+```bash
+# 6. Destroy infrastructure
 terraform destroy
 ```
 
-> Destroys all AWS infrastructure created by Terraform (EKS cluster, VPC, subnets, IAM roles, node groups). Wait for the LB to deprovision first to avoid orphaned resources.
+> Destroys all AWS infrastructure created by Terraform (EKS cluster, VPC, subnets, IAM roles, node groups).
 
 Type **`yes`** when prompted.
 
 > [!CAUTION]
 > Always delete the Ingress/LoadBalancer resources **before** `terraform destroy` to avoid orphaned AWS Load Balancers that keep incurring charges.
+
+> [!WARNING]
+> If you skip Steps 3-5 and later recreate the cluster, the EBS CSI driver won't work because the old IAM role's trust policy references the old cluster's OIDC endpoint. You'll need to delete the old role and OIDC provider before creating new ones.
+
+---
+
+## 🛠️ Troubleshooting — EBS CSI Driver Not Working After Re-Deploy
+
+**Symptom:** After destroying and recreating the cluster, the EBS CSI controller pods show `CrashLoopBackOff` (1/6 containers running), pods that need PVCs stay `Pending`, and the addon status is stuck on `CREATING`.
+
+**Root Cause:** The IAM role (`AmazonEKS_EBS_CSI_DriverRole`) has a trust policy linked to the **old cluster's OIDC endpoint**. The new cluster has a **different OIDC endpoint**, so the CSI controller can't assume the role → no permissions → crash.
+
+**How to diagnose:**
+
+```bash
+# Check if CSI controller pods are crashing
+kubectl get pods -n kube-system | grep ebs
+```
+
+> If you see `CrashLoopBackOff` with `1/6` containers, the IAM role is broken.
+
+```bash
+# Check the error logs
+kubectl logs -n kube-system <ebs-csi-controller-pod-name> -c csi-provisioner
+```
+
+> Look for `AccessDenied`, `WebIdentityErr`, or `AssumeRoleWithWebIdentity` errors — these confirm the IAM trust policy mismatch.
+
+**How to fix:**
+
+```bash
+# 1. Delete the broken addon
+aws eks delete-addon --cluster-name novatech-dev-cluster --addon-name aws-ebs-csi-driver --region us-east-1
+```
+
+> Removes the broken addon so we can reinstall it cleanly.
+
+```bash
+# 2. Delete the old IAM service account
+eksctl delete iamserviceaccount --region us-east-1 --name ebs-csi-controller-sa --namespace kube-system --cluster novatech-dev-cluster
+```
+
+> Deletes the old service account binding so eksctl will recreate it from scratch.
+
+```bash
+# 3. Re-associate OIDC provider for the NEW cluster
+eksctl utils associate-iam-oidc-provider --region us-east-1 --cluster novatech-dev-cluster --approve
+```
+
+> Creates a new OIDC provider that matches the new cluster's identity endpoint.
+
+```bash
+# 4. Recreate the IAM role linked to the NEW cluster
+eksctl create iamserviceaccount \
+  --region us-east-1 \
+  --name ebs-csi-controller-sa \
+  --namespace kube-system \
+  --cluster novatech-dev-cluster \
+  --role-name AmazonEKS_EBS_CSI_DriverRole \
+  --role-only \
+  --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+  --approve
+```
+
+> Creates a new IAM role with a trust policy that matches the new cluster's OIDC endpoint.
+
+```bash
+# 5. Get your account ID
+aws sts get-caller-identity --query Account --output text
+```
+
+> Returns your 12-digit AWS account ID for the next command.
+
+```bash
+# 6. Reinstall the addon (replace <ACCOUNT_ID>)
+aws eks create-addon \
+  --cluster-name novatech-dev-cluster \
+  --addon-name aws-ebs-csi-driver \
+  --service-account-role-arn arn:aws:iam::<ACCOUNT_ID>:role/AmazonEKS_EBS_CSI_DriverRole \
+  --region us-east-1
+```
+
+> Installs the EBS CSI driver addon linked to the newly created role.
+
+```bash
+# 7. Wait ~2 minutes, then verify
+kubectl get pods -n kube-system | grep ebs
+```
+
+> All containers should now show `Running` (6/6 for controllers, 3/3 for nodes).
+
+```bash
+# 8. Recreate the StorageClass (also gets deleted during cleanup)
+kubectl apply -f k8s/StroageClass.yaml
+```
+
+> Recreates the `quickcart-sc` StorageClass. Then you can proceed with deploying your workloads.
