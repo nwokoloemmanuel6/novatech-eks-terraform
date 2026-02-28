@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: quickcart-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: quickcart.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: quickcart-service
+                port:
+                  number: 80
