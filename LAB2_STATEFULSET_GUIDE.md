@@ -27,17 +27,23 @@ volumeClaimTemplates → Auto-provisioned PVC per replica
 kubectl get nodes
 ```
 
+> Lists all worker nodes in the cluster and their current status. All should show `Ready`.
+
 All nodes should show `STATUS: Ready`. If not, check your kubeconfig:
 
 ```bash
 aws eks update-kubeconfig --region us-east-1 --name novatech-dev-cluster
 ```
 
+> Downloads the cluster credentials and writes them to your `~/.kube/config` file so `kubectl` can authenticate with your EKS cluster.
+
 ### Step 1.2 — Check StorageClass exists
 
 ```bash
 kubectl get sc
 ```
+
+> Lists all StorageClasses available in the cluster. `sc` is short for `storageclass`.
 
 You should see `quickcart-sc` in the list. This is the StorageClass we created in Lab 1 that uses the EBS CSI driver to dynamically provision gp3 volumes.
 
@@ -46,6 +52,8 @@ You should see `quickcart-sc` in the list. This is the StorageClass we created i
 ```bash
 kubectl get csidrivers
 ```
+
+> Lists all Container Storage Interface (CSI) drivers installed. The EBS CSI driver allows Kubernetes to dynamically create AWS EBS volumes.
 
 You should see `ebs.csi.aws.com`. If not, refer to Lab 1 Part 3 for CSI driver installation steps.
 
@@ -71,11 +79,15 @@ A ConfigMap is a Kubernetes object that stores **non-sensitive configuration dat
 kubectl apply -f k8s/lab2-statefulset/postgres-config.yaml
 ```
 
+> Creates the ConfigMap resource in the cluster from the YAML file. `apply` creates the resource if it doesn't exist, or updates it if it does.
+
 ### Step 2.2 — Verify
 
 ```bash
 kubectl get configmap
 ```
+
+> Lists all ConfigMaps in the current namespace. You should see `postgres-config` alongside any default ones.
 
 You should see `postgres-config` in the list.
 
@@ -84,6 +96,8 @@ You should see `postgres-config` in the list.
 ```bash
 kubectl describe configmap postgres-config
 ```
+
+> Shows the full details of the ConfigMap including all its key-value data pairs, labels, and metadata.
 
 You'll see the key-value pairs in plain text:
 
@@ -120,11 +134,15 @@ A Secret is similar to a ConfigMap, but designed for **sensitive data** like pas
 kubectl apply -f k8s/lab2-statefulset/postgres-secret.yaml
 ```
 
+> Creates the Secret resource in the cluster. Kubernetes automatically base64-encodes the `stringData` values when storing them.
+
 ### Step 3.2 — Verify
 
 ```bash
 kubectl get secrets
 ```
+
+> Lists all Secrets in the current namespace. Shows name, type, number of data keys, and age.
 
 You should see `postgres-secret` with type `Opaque`.
 
@@ -134,11 +152,15 @@ You should see `postgres-secret` with type `Opaque`.
 kubectl get secret postgres-secret -o yaml
 ```
 
+> Outputs the full Secret as YAML. The `-o yaml` flag shows the raw object including the base64-encoded data values.
+
 Notice the password field shows a base64-encoded string — not the plain text. You can decode it to prove it's just encoding:
 
 ```bash
 kubectl get secret postgres-secret -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 --decode
 ```
+
+> Extracts just the password field using JSONPath, then pipes it to `base64 --decode` to show the original plain text value.
 
 Output: `supersecurepassword` — proving base64 is encoding, not encryption.
 
@@ -162,11 +184,15 @@ A normal Kubernetes Service gets a `clusterIP` — a single virtual IP that load
 kubectl apply -f k8s/lab2-statefulset/postgres-headless.yaml
 ```
 
+> Creates the Headless Service. This gives each StatefulSet pod a unique, stable DNS name instead of a single load-balanced IP.
+
 ### Step 4.2 — Verify
 
 ```bash
 kubectl get svc postgres
 ```
+
+> Shows the details of the `postgres` Service. `svc` is short for `service`. The `CLUSTER-IP: None` confirms it's headless.
 
 You should see:
 
@@ -205,11 +231,15 @@ A StatefulSet is like a Deployment, but for **workloads that need stable identit
 kubectl apply -f k8s/lab2-statefulset/postgres-statefulset.yaml
 ```
 
+> Creates the StatefulSet, which in turn creates the pod `postgres-0`, auto-provisions a PVC, and injects the ConfigMap + Secret as environment variables.
+
 ### Step 5.2 — Watch it come up
 
 ```bash
 kubectl get pods -w
 ```
+
+> Lists pods and watches for changes in real-time. The `-w` flag keeps the command running and streams updates as pod statuses change.
 
 You'll see `postgres-0` go through: `Pending` → `ContainerCreating` → `Running`.
 
@@ -227,6 +257,8 @@ Press `Ctrl+C` to stop watching once it's `Running`.
 kubectl get pods
 ```
 
+> Lists all pods in the current namespace, showing their name, readiness, status, restart count, and age.
+
 You will see:
 
 ```
@@ -241,6 +273,8 @@ Notice: `postgres-0` — not a random hash like `postgres-7d4f8b6c9-xk2pq`. That
 ```bash
 kubectl get pvc
 ```
+
+> Lists all PersistentVolumeClaims. Shows whether each PVC is `Bound` to a PV and which StorageClass provisioned it.
 
 You'll see:
 
@@ -263,6 +297,8 @@ This PVC was **not created manually** — the StatefulSet's `volumeClaimTemplate
 kubectl exec -it postgres-0 -- psql -U quickcartuser -d quickcartdb
 ```
 
+> Opens an interactive shell inside the `postgres-0` pod and runs the `psql` client. `-i` keeps stdin open, `-t` allocates a terminal. Everything after `--` is the command run inside the container.
+
 This opens an interactive PostgreSQL shell. The credentials (`quickcartuser`, `quickcartdb`) came from the ConfigMap, and the password was handled by the Secret.
 
 ### Step 7.2 — Create test data
@@ -273,6 +309,8 @@ INSERT INTO orders (product, quantity) VALUES ('Laptop', 2);
 INSERT INTO orders (product, quantity) VALUES ('Keyboard', 5);
 SELECT * FROM orders;
 ```
+
+> Creates a table called `orders`, inserts two rows, and queries them. `SERIAL` auto-increments the ID. This data is stored on the EBS volume via the PVC.
 
 You should see:
 
@@ -289,11 +327,15 @@ Exit the shell:
 \q
 ```
 
+> Quits the `psql` interactive shell and returns you to your terminal.
+
 ### Step 7.3 — Delete the pod
 
 ```bash
 kubectl delete pod postgres-0
 ```
+
+> Forcefully deletes the pod. The StatefulSet controller detects this and automatically recreates a new `postgres-0` pod, reattaching it to the same PVC.
 
 The StatefulSet controller immediately notices the pod is gone and **recreates it** with the same name `postgres-0`, reattaching the same PVC.
 
@@ -303,17 +345,23 @@ The StatefulSet controller immediately notices the pod is gone and **recreates i
 kubectl get pods -w
 ```
 
+> Watches pods in real-time. You'll see the new `postgres-0` go from `Pending` → `Running`.
+
 Wait until `postgres-0` is `Running` again (`Ctrl+C` to stop). Then reconnect:
 
 ```bash
 kubectl exec -it postgres-0 -- psql -U quickcartuser -d quickcartdb
 ```
 
+> Reconnects to the newly created pod. Same PVC means same data.
+
 ### Step 7.5 — Verify data survived
 
 ```sql
 SELECT * FROM orders;
 ```
+
+> Queries the `orders` table again. If the data is still there, persistence is confirmed.
 
 🔥 **Data is still there.** Same rows, same values. The pod was destroyed and recreated, but the PVC kept the data on the EBS volume. That's real persistence.
 
@@ -333,11 +381,15 @@ SELECT * FROM orders;
 kubectl scale statefulset postgres --replicas=2
 ```
 
+> Tells Kubernetes to scale the StatefulSet to 2 replicas. A new pod `postgres-1` will be created with its own PVC.
+
 ### Step 8.2 — Watch the ordered startup
 
 ```bash
 kubectl get pods -w
 ```
+
+> Watches pods scale up. `postgres-1` starts only after `postgres-0` is fully ready — that's ordered startup.
 
 You'll see `postgres-1` appear **after** `postgres-0` is fully ready. StatefulSets start pods sequentially (0 → 1 → 2), never in parallel. Press `Ctrl+C` when `postgres-1` is Running.
 
@@ -346,6 +398,8 @@ You'll see `postgres-1` appear **after** `postgres-0` is fully ready. StatefulSe
 ```bash
 kubectl get pvc
 ```
+
+> Shows all PVCs. You'll now see two — one per replica, each with its own independent EBS volume.
 
 ```
 NAME                         STATUS   STORAGECLASS   CAPACITY
@@ -361,6 +415,8 @@ Each replica got **its own independent PVC and EBS volume**. Data is NOT shared 
 kubectl scale statefulset postgres --replicas=1
 ```
 
+> Scales back to 1 replica. `postgres-1` is terminated but its PVC is preserved — Kubernetes never auto-deletes StatefulSet PVCs.
+
 `postgres-1` is terminated, but its PVC (`postgres-storage-postgres-1`) is **NOT deleted**. Kubernetes preserves StatefulSet PVCs so you don't lose data accidentally. If you scale back up, `postgres-1` will reattach to the same PVC.
 
 ---
@@ -375,6 +431,8 @@ kubectl scale statefulset postgres --replicas=1
 kubectl run debug --image=busybox -it --rm -- sh
 ```
 
+> Creates a temporary pod using the `busybox` image and opens an interactive shell. `--rm` auto-deletes the pod when you exit.
+
 ### Step 9.2 — Resolve the StatefulSet DNS
 
 Inside the debug pod:
@@ -382,6 +440,8 @@ Inside the debug pod:
 ```bash
 nslookup postgres-0.postgres
 ```
+
+> Performs a DNS lookup for the StatefulSet pod. The Headless Service resolves this to the pod's direct IP address.
 
 You'll see the DNS resolve to the pod's IP address:
 
@@ -398,6 +458,8 @@ Exit the debug pod:
 exit
 ```
 
+> Exits the debug pod's shell. The pod is automatically deleted because we used `--rm`.
+
 ---
 
 ## 🧹 Cleanup
@@ -406,10 +468,16 @@ To remove all Lab 2 resources:
 
 ```bash
 kubectl delete -f k8s/lab2-statefulset/
+```
 
+> Deletes all resources defined in the YAML files inside the directory — the ConfigMap, Secret, Headless Service, and StatefulSet.
+
+```bash
 # Delete the auto-provisioned PVCs (not removed automatically)
 kubectl delete pvc -l app=postgres
 ```
+
+> Deletes PVCs that have the label `app=postgres`. The `-l` flag filters by label. StatefulSet PVCs must be deleted manually.
 
 ---
 
